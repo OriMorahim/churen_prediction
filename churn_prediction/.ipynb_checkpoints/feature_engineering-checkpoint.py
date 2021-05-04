@@ -1,0 +1,151 @@
+from collections import defaultdict
+from typing import List, Dict, Set, Tuple, Optional, NamedTuple
+
+import pandas as pd
+
+DATE_COL = 'ActiveDate'
+USER_ID_COL = 'ID'
+TARGET_COL = 'target'
+ALL_EQUITY_COLUMN = 'EOM_Equity'
+DATES_DIFFS_CHECK_COLUMNS = ['LastPosOpenDate', 'LastLoggedIn']
+
+EOM_EQUITY_BY_TYPES = [
+    'EOM_Equity_Copy',
+    'EOM_Equity_Real_Crypto',
+    'EOM_Equity_Real_Stocks',
+    'EOM_Equity_CFD_Crypto',
+    'EOM_Equity_CFD_Stocks',
+    'EOM_Equity_FX/Comm/Ind',
+    'EOM_Equity'
+]
+
+AMOUNT_IN_BY_TYPES = [
+    'AmountIn_NewTrades_Copy',
+    'AmountIn_NewTrades_Real_Stocks',
+    'AmountIn_NewTrades_CFD_Stocks',
+    'AmountIn_NewTrades_Real_Crypto',
+    'AmountIn_NewTrades_CFD_Crypto',
+    'AmountIn_NewTrades_FX/Comm/Ind',
+    'AmountIn_NewTrades_Total'
+]
+
+COUNT_IN_BY_TYPES = [
+    'NewTrades_Copy',
+    'NewTrades_Real_Stocks',
+    'NewTrades_CFD_Stocks',
+    'NewTrades_Real_Crypto',
+    'NewTrades_CFD_Crypto',
+    'NewTrades_FX/Comm/Ind',
+    'NewTrades_Total'
+]
+
+REVENUE_BY_TYPES = [
+    'Revenue_Copy',
+    'Revenue_Real_Stocks',
+    'Revenue_CFD_Stocks',
+    'Revenue_Real_Crypto',
+    'Revenue_CFD_Crypto',
+    'Revenue_FX/Comm/Ind',
+    'Revenue_Total'
+]
+
+FEATURES_TO_LAG = EOM_EQUITY_BY_TYPES+AMOUNT_IN_BY_TYPES+COUNT_IN_BY_TYPES+REVENUE_BY_TYPES
+
+
+class EngineeredFeaturesOrganizer(NamedTuple):
+    all_new_features: Set[str]
+    all_new_features_classified: Optional[Dict[str, Set[str]]] = None
+        
+        
+class FeatureEngineeringResponse(NamedTuple):
+    enriched_data: pd.DataFrame
+    lag_features_organizer: EngineeredFeaturesOrganizer
+    moving_averages_features_organizer: EngineeredFeaturesOrganizer
+    dates_diff_organizer: EngineeredFeaturesOrganizer
+    
+
+def generate_lag_features(rawdata:pd.DataFrame, features_to_lag: List[str] = FEATURES_TO_LAG,
+                         lags_range: int = 3) -> Tuple[pd.DataFrame, EngineeredFeaturesOrganizer]:
+    """
+    This function generate lag features for each of the features provided in the 
+    list. The number of lags detemined by the lags_range parameter
+    """
+    rawdata = rawdata.sort_values(by=[USER_ID_COL, DATE_COL], ascending=True)
+    
+    all_lags_features_classified: Dict[str, Set[str]] = defaultdict(set)
+    total_features_lags: Set[str] = set()
+        
+    for feature in features_to_lag:
+        for lag in range(1, lags_range+1):
+            lag_feature_name = f'{feature}_lag_{lag}'
+            rawdata[lag_feature_name] = rawdata.groupby([USER_ID_COL])[feature].shift(lag)
+            
+            all_lags_features_classified[feature].add(lag_feature_name)
+            total_features_lags.add(lag_feature_name)
+    
+    lag_features_organizer = EngineeredFeaturesOrganizer(
+        all_new_features_classified=all_lags_features_classified,
+        all_new_features=total_features_lags
+    )
+    
+    return rawdata, lag_features_organizer
+
+
+def generate_moving_averages(rawdata:pd.DataFrame, lag_feature_organizer: EngineeredFeaturesOrganizer):
+    """
+    """
+    total_features_moving_averages: Set[str] = set()
+    moving_averages_features_classified: Dict[str, Set[str]] = defaultdict(set)
+        
+    for feature, lags in lag_feature_organizer.all_new_features_classified.items():
+        moving_ave_col_name = f'pred_moving_ave_{feature}'
+        moving_average_relevant_cols = list(lags) + [feature]
+        rawdata[moving_ave_col_name] = rawdata[moving_average_relevant_cols].mean(axis=1)
+        total_features_moving_averages.add(moving_ave_col_name)
+        moving_averages_features_classified[feature].add(moving_ave_col_name)
+        
+    moving_averages_features_organizer = EngineeredFeaturesOrganizer(
+        all_new_features=total_features_moving_averages,
+        all_new_features_classified=moving_averages_features_classified
+    )    
+    
+    return rawdata, moving_averages_features_organizer
+
+
+def generate_time_diffrences_features(rawdata: pd.DataFrame, sanpshot_date_col: str = DATE_COL,
+                                      date_features_to_check_diff: List[str] = DATES_DIFFS_CHECK_COLUMNS):
+    """
+    This function finds the difference in days between the snap-shot date and
+    the rest of the time based features specify in time_features_check_diff
+    """
+    total_features_date_differnces: Set[str] = set()
+        
+    for feature in date_features_to_check_diff:
+        date_diff_feature_name = f'{sanpshot_date_col}_diff_{feature}'
+        rawdata[date_diff_feature_name] = (rawdata[sanpshot_date_col]-rawdata[feature]).dt.days
+        total_features_date_differnces.add(date_diff_feature_name)
+    
+    dates_diff_organizer = EngineeredFeaturesOrganizer(
+        all_new_features=total_features_date_differnces
+    )
+    
+    return rawdata, dates_diff_organizer
+
+
+def presplit_feature_engineering(rawdata: pd.DataFrame, lags_range: int = 3):
+    """
+    This function execute the whole feature engineering steps. The all the new
+    features generated by this function can be executed to the test and train together
+    there will be no leakage
+    """
+    rawdata, lag_features_organizer = generate_lag_features(rawdata, lags_range=lags_range)
+    rawdata, moving_averages_features_organizer = generate_moving_averages(rawdata, lag_features_organizer)    
+    rawdata, dates_diff_organizer = generate_time_diffrences_features(rawdata)
+    
+    return FeatureEngineeringResponse(
+        enriched_data=rawdata,
+        lag_features_organizer=lag_features_organizer,
+        moving_averages_features_organizer=moving_averages_features_organizer,
+        dates_diff_organizer=moving_averages_features_organizer
+    )
+
