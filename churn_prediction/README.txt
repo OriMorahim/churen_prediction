@@ -34,4 +34,12 @@ therefore i'll chose a model that can handle imbalanced situations (GBM), withou
 
 ** If I had more time I would:
 1. add cross validaiotn to set hyper param 
-2. Try to segment the users to cluster and generae a model to each cluster  
+2. Try to segment the users to cluster and generae a model to each cluster 
+
+
+
+
+
+search_term|Product_1|Product_2|Product_3|title_1....
+X             5555
+Y                       5555
